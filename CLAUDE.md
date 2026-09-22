@@ -140,6 +140,31 @@ GET 详情也返回它，前端刷新页面不用自己按 status 猜。
 另外 `normalizeItem` 还守着：yellow 必须带 assumption，带不出来降 red——
 没有假设的黄色就是一张空清单，而"带假设比空清单好"是整个机制的立足点。
 
+## 部署
+
+生产跑在一台云主机上：**systemd + nginx**，不走 docker compose
+（compose 那套是给全新机器准备的；现有机器的 MySQL 是独立容器）。
+
+后端：`git pull` → `go build -trimpath -ldflags="-s -w" -o baize ./cmd/api`
+→ `systemctl restart baize`（服务名 `baize`，监听 8080）。
+配置在同目录 `.env`，**不进 git**。
+
+前端：`git pull` → `npm ci && npm run build`，产物 `dist/` 就是 nginx 的 root。
+
+nginx 把 `/api/` 反代到 `127.0.0.1:8080`。前端 `VITE_API_BASE` 默认就是 `/api`
+走同源，所以后端 `CORS_ORIGINS` 留空即可。
+
+**坑**：国内云主机连不上 proxy.golang.org（i/o timeout），必须先
+`go env -w GOPROXY=https://goproxy.cn,direct`，否则 `go build` 卡死在下载依赖。
+
+**安全底线**（这台机器 2026-07 因此被删过库，别再犯）：
+
+1. MySQL 端口必须绑 `127.0.0.1:3306:3306`。写成 `"3306:3306"` 就是绑
+   `0.0.0.0`，全网可扫。
+2. 数据库密码用 `openssl rand -hex 16` 生成。**任何密码都不许出现在提交里**——
+   git 一旦记录就要当永久泄露处理，force push 重置分支也删不掉旧 commit。
+3. 服务器地址、凭证、事故细节记在本地 memory，不写进这个公开仓库。
+
 ## 待办，按优先级
 
 1. **接真实模型跑通一遍**：填 `.env` 的 `LLM_API_KEY`，
