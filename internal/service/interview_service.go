@@ -39,6 +39,9 @@ const (
 // 这不是模型决定的，是产品底线：这个数字决定整份方案的大小。
 const FirstQuestion = "先问个最要紧的：你手上最多能亏掉多少钱，还不影响正常生活？大概给个数就行。"
 
+// firstRound 是提问的第一轮，AskedCount 从 1 开始计。
+const firstRound = 1
+
 type InterviewService struct {
 	projects *repository.ProjectRepo
 	messages *repository.MessageRepo
@@ -125,7 +128,7 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 	// 每周几小时，裸数字抓过来会把亏损上限污染成 3 元、35 元这种荒谬值，
 	// 而这个数会原样进 prompt 决定整份方案的大小。
 	if p.RiskBudget < 0 {
-		if n, ok := parseMoney(content, p.AskedCount == 1); ok {
+		if n, ok := parseMoney(content, p.AskedCount == firstRound); ok {
 			p.RiskBudget = n
 		}
 	}
@@ -140,7 +143,16 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 	if p.Status == model.StatusScouting {
 		question, done, err = s.askScout(ctx, p, history)
 	} else {
-		question, done, err = s.askInterview(ctx, p, history)
+		var tooVague bool
+		question, done, tooVague, err = s.askInterview(ctx, p, history)
+		// 输入框里填的不是一个具体想法，转去盘点。只认第一轮的判断：
+		// 后面几轮用户聊的是城市、时间、手上有什么，再翻盘会把人在两条路之间来回甩。
+		if err == nil && tooVague && p.AskedCount == firstRound {
+			p.Entry = model.EntryNoIdea
+			p.Status = model.StatusScouting
+			p.Idea = ""
+			question, done, err = s.askScout(ctx, p, history)
+		}
 	}
 	if err != nil {
 		return nil, "", "", err
@@ -170,10 +182,10 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 }
 
 // askInterview 主干提问：围绕一个已有想法往下挖。
-func (s *InterviewService) askInterview(ctx context.Context, p *model.Project, history []model.Message) (string, bool, error) {
+func (s *InterviewService) askInterview(ctx context.Context, p *model.Project, history []model.Message) (string, bool, bool, error) {
 	var r llm.InterviewResult
 	if err := s.ai.ChatJSON(ctx, llm.InterviewMessages(toLLM(history)), &r); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 
 	e := r.Extracted
@@ -188,7 +200,7 @@ func (s *InterviewService) askInterview(ctx context.Context, p *model.Project, h
 	}
 
 	q := strings.TrimSpace(r.Question)
-	return q, r.Done || q == "", nil
+	return q, r.Done || q == "", r.IdeaTooVague, nil
 }
 
 // askScout 入口 B 的盘点提问：摸清他手上现成有什么。

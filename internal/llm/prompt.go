@@ -17,11 +17,16 @@ const systemInterview = `你是一个创业起步顾问，正在通过对话了�
 4. 当再问下去也不会改变方案里的任何一条时，把 done 设为 true。
 5. 优先问这些会改变方案的事：在哪个城市哪条街、每周能投入多少时间、
    手上有什么现成资源（车、场地、设备、认识的人）、有没有相关经验。
+6. 如果用户其实没说出任何一件具体想做的事（比如只说"不知道做什么""随便给点建议"
+   "想搞点钱"），把 idea_too_vague 设为 true。他需要的是先盘点手上现成有什么，
+   而不是被追着问一个并不存在的想法。
+   只要说得出行当就不算空泛，哪怕很粗，比如"卖吃的""接点手工活"都算数。
 
 【输出格式】
 只输出 JSON，不要任何额外文字：
 {
   "done": false,
+  "idea_too_vague": false,
   "question": "下一个要问的问题，done 为 true 时留空字符串",
   "hooked_item": "这个问题对应方案里的哪一条，done 为 true 时留空字符串",
   "extracted": {
@@ -196,7 +201,11 @@ func withSystem(system string, history []Message) []Message {
 
 // InterviewResult 主干提问的结构化返回。
 type InterviewResult struct {
-	Done       bool   `json:"done"`
+	Done bool `json:"done"`
+
+	// IdeaTooVague 用户其实没说出具体想做的事，该转去盘点。
+	IdeaTooVague bool `json:"idea_too_vague"`
+
 	Question   string `json:"question"`
 	HookedItem string `json:"hooked_item"`
 	Extracted  struct {

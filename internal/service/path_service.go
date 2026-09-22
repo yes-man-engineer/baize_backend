@@ -145,7 +145,8 @@ func (s *PathService) Select(ctx context.Context, token, pathID string) (*model.
 		return nil, "", "", err
 	}
 
-	question, done, err := s.interview.askInterview(ctx, p, history)
+	// 这里已经选定了一条路，不存在想法空泛的问题，第三个返回值丢掉。
+	question, done, _, err := s.interview.askInterview(ctx, p, history)
 	if err != nil {
 		return nil, "", "", err
 	}
