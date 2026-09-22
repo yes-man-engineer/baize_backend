@@ -1,0 +1,19 @@
+# 编译产物
+/baize
+/bin/
+*.exe
+*.test
+*.out
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# 依赖
+/vendor/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
