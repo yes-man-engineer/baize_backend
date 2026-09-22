@@ -4,13 +4,18 @@ services:
     container_name: baize_mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      # 不给默认值：这个项目 2026-07-16 就是因为弱密码 + 3306 暴露公网
+      # 被扫库删库，留了个 RECOVER_YOUR_DATA 勒索库。密码必须由部署者
+      # 在 .env 里显式给强随机值，缺了就让容器起不来，比悄悄用弱密码强。
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: startup_copilot
       MYSQL_USER: baize
-      MYSQL_PASSWORD: ${DB_PASSWORD:-baize123}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
     ports:
-      - "3306:3306"
+      # 只绑本机。数据库绝不该对公网开放——写成 "3306:3306" 就是
+      # 绑 0.0.0.0，全网可扫，这个项目已经为此付出过代价。
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       # 只建库；表结构由 GORM AutoMigrate 维护。
@@ -33,7 +38,7 @@ services:
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: baize
-      DB_PASSWORD: ${DB_PASSWORD:-baize123}
+      DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: startup_copilot
       # LLM_API_KEY 必填：不填服务照样起得来，但所有走模型的接口都会报错，
       # 启动日志里会有一条 warn。这里不用 :? 硬失败，否则 down / logs / ps
