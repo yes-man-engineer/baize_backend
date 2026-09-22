@@ -163,6 +163,36 @@ section 从这些里选：启动资金、合规手续、选址、选品、定价
 采购设备、第一周计划、风险。
 green 条目的 assumption 和 verify_action 留空字符串。`
 
+// ── 开场白 ─────────────────────────────────────────────────────
+
+const systemOpening = `用户刚说了一句他想做的事。你要写一句话作为对话的开场。
+
+【这句话只干两件事】
+1. 接住他说的那句，让他知道你听懂了。一句带过，不要展开，不要复述一遍。
+2. 问他打算先拿出多少钱来试。
+
+【关于问钱，这是唯一允许问的事】
+不要问别的，不要顺带问城市、时间、经验，这些后面会问。
+不要给任何建议，不要评价这个想法靠不靠谱，不要说"这个方向不错"这类话。
+
+用投入的说法，不要用亏损的说法。
+问"打算先拿多少钱出来试试、这笔钱打水漂也不影响过日子"，
+不要问"你最多能亏多少钱"。同样一个数字，前者用户答得出来也答得诚实，
+后者像是在让他设想自己失败。
+
+【语气】
+像街坊聊天，口语化，不要书面语。不要热情，不要打鸡血，
+不要"太棒了""一起加油"这种话。认真、直接、不哄人。
+
+用户那句话要是根本没说清想做什么，甚至是一句废话或者乱敲的字符，
+就别硬接，直说没太看懂他想做啥，然后照样问钱。
+
+【输出格式】
+只输出 JSON，不要任何额外文字：
+{
+  "question": "你要说的那句话，两句以内"
+}`
+
 // ── 上下文组装 ─────────────────────────────────────────────────
 
 // InterviewMessages 入口 A / 主干的提问上下文。
@@ -173,6 +203,14 @@ func InterviewMessages(history []Message) []Message {
 // ScoutMessages 入口 B 的盘点提问上下文。
 func ScoutMessages(history []Message) []Message {
 	return withSystem(systemScout, history)
+}
+
+// OpeningMessages 入口 A 的开场白：接住用户的想法，然后问投入预算。
+func OpeningMessages(idea string) []Message {
+	return []Message{
+		{Role: RoleSystem, Content: systemOpening},
+		{Role: RoleUser, Content: idea},
+	}
 }
 
 // PathsMessages 根据盘点生成 3 条候选路径。
@@ -198,6 +236,11 @@ func withSystem(system string, history []Message) []Message {
 }
 
 // ── 结构化返回 ─────────────────────────────────────────────────
+
+// OpeningResult 开场白的结构化返回。
+type OpeningResult struct {
+	Question string `json:"question"`
+}
 
 // InterviewResult 主干提问的结构化返回。
 type InterviewResult struct {

@@ -8,10 +8,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/yes-man-engineer/baize_backend/internal/llm"
 	"github.com/yes-man-engineer/baize_backend/internal/model"
 	"github.com/yes-man-engineer/baize_backend/internal/repository"
+	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
 
 var (
@@ -35,9 +39,17 @@ const (
 	ActionPlan NextAction = "plan"
 )
 
-// FirstQuestion 第一个问题永远是亏损上限，两个入口都一样。
-// 这不是模型决定的，是产品底线：这个数字决定整份方案的大小。
-const FirstQuestion = "先问个最要紧的：你手上最多能亏掉多少钱，还不影响正常生活？大概给个数就行。"
+// FirstQuestion 开场的兜底问法：入口 B 没有想法可接，以及模型没生成出开场白时用。
+// 无论谁来写这句，第一个问题问的都是这笔预算，这是产品底线：
+// 这个数字决定整份方案的大小，不交给模型决定。
+//
+// 用投入的说法而不是亏损的说法。同一个数字，问"打算拿多少出来试"用户答得诚实，
+// 问"最多能亏多少"像是在让他设想自己失败，一上来就泼冷水。
+const FirstQuestion = "先问个最要紧的：你打算先拿多少钱出来试试？就当这笔钱打了水漂，也不影响正常过日子的那种。"
+
+// openingTimeout 开场白卡在「开始」按钮上，用户在等，宁可退回固定问法也不让他干等。
+// 这里只生成一句话，正常两三秒就回来了。
+const openingTimeout = 15 * time.Second
 
 // firstRound 是提问的第一轮，AskedCount 从 1 开始计。
 const firstRound = 1
@@ -85,18 +97,41 @@ func (s *InterviewService) Start(ctx context.Context, idea string) (*model.Proje
 		}
 	}
 
+	question := FirstQuestion
+	if idea != "" {
+		question = s.openingQuestion(ctx, idea)
+	}
+
 	if err := s.messages.Create(ctx, &model.Message{
-		ProjectID: p.ID, Role: model.RoleAssistant, Content: FirstQuestion,
+		ProjectID: p.ID, Role: model.RoleAssistant, Content: question,
 	}); err != nil {
 		return nil, "", err
 	}
 
-	p.AskedCount = 1
+	p.AskedCount = firstRound
 	if err := s.projects.Save(ctx, p); err != nil {
 		return nil, "", err
 	}
 
-	return p, FirstQuestion, nil
+	return p, question, nil
+}
+
+// openingQuestion 让模型接住用户那句想法再问预算，问的仍然只能是预算。
+// 生成不出来就退回 FirstQuestion，开场绝不会问成别的事。
+func (s *InterviewService) openingQuestion(ctx context.Context, idea string) string {
+	ctx, cancel := context.WithTimeout(ctx, openingTimeout)
+	defer cancel()
+
+	var r llm.OpeningResult
+	if err := s.ai.ChatJSON(ctx, llm.OpeningMessages(idea), &r); err != nil {
+		logger.Warn("[openingQuestion] 开场白生成失败，回退固定问法", zap.Error(err))
+		return FirstQuestion
+	}
+
+	if q := strings.TrimSpace(r.Question); q != "" {
+		return q
+	}
+	return FirstQuestion
 }
 
 // Answer 收下用户的回答，返回下一个问题和下一步动作。
