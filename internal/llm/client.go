@@ -27,25 +27,28 @@ type Message struct {
 // Client 走 OpenAI 兼容的 /chat/completions 接口。
 // DeepSeek、Kimi、通义、智谱都能用同一套，换 BaseURL 和 Model 即可。
 type Client struct {
-	baseURL string
-	apiKey  string
-	model   string
-	http    *http.Client
+	baseURL     string
+	apiKey      string
+	model       string
+	temperature *float32
+	http        *http.Client
 }
 
-func NewClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
+// NewClient 的 temperature 传 nil 表示不带这个参数，由模型用自己的默认值。
+func NewClient(baseURL, apiKey, model string, temperature *float32, timeout time.Duration) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
-		http:    &http.Client{Timeout: timeout},
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		apiKey:      apiKey,
+		model:       model,
+		temperature: temperature,
+		http:        &http.Client{Timeout: timeout},
 	}
 }
 
 type chatRequest struct {
 	Model          string          `json:"model"`
 	Messages       []Message       `json:"messages"`
-	Temperature    float32         `json:"temperature"`
+	Temperature    *float32        `json:"temperature,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 }
 
@@ -88,7 +91,7 @@ func (c *Client) chat(ctx context.Context, msgs []Message, wantJSON bool) (strin
 	body := chatRequest{
 		Model:       c.model,
 		Messages:    msgs,
-		Temperature: 0.4,
+		Temperature: c.temperature,
 	}
 	if wantJSON {
 		body.ResponseFormat = &responseFormat{Type: "json_object"}

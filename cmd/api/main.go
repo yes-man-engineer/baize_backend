@@ -45,6 +45,7 @@ func main() {
 		cfg.LLMBaseURL,
 		cfg.LLMAPIKey,
 		cfg.LLMModel,
+		cfg.LLMTemperature,
 		time.Duration(cfg.LLMTimeoutSeconds)*time.Second,
 	)
 

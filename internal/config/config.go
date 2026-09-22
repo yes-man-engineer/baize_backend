@@ -26,6 +26,10 @@ type Config struct {
 	LLMAPIKey         string
 	LLMModel          string
 	LLMTimeoutSeconds int
+
+	// LLMTemperature 留空表示不给模型传这个参数。
+	// Kimi 的 k2/k3 只接受 1，传别的值会被拒；DeepSeek 可以填 0.4。
+	LLMTemperature *float32
 }
 
 // Load 读取 .env（不存在时忽略）与环境变量。
@@ -48,6 +52,7 @@ func Load() *Config {
 		LLMAPIKey:         env("LLM_API_KEY", ""),
 		LLMModel:          env("LLM_MODEL", "deepseek-chat"),
 		LLMTimeoutSeconds: envInt("LLM_TIMEOUT_SECONDS", 120),
+		LLMTemperature:    envFloatPtr("LLM_TEMPERATURE"),
 	}
 }
 
@@ -90,4 +95,18 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// envFloatPtr 读可选的浮点配置，留空或填了非法值都返回 nil。
+func envFloatPtr(key string) *float32 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseFloat(raw, 32)
+	if err != nil {
+		return nil
+	}
+	value := float32(parsed)
+	return &value
 }
