@@ -20,6 +20,9 @@ import (
 // 超时、网络失败、额度不足再要一遍也是一样的结果，白等一轮。
 var errBadJSON = errors.New("模型返回的不是 JSON")
 
+// finishReasonStop 模型自己写完了。其他值都意味着输出没写全。
+const finishReasonStop = "stop"
+
 // chatJSONAttempts 含首次在内的总次数。
 const chatJSONAttempts = 3
 
@@ -77,7 +80,14 @@ type responseFormat struct {
 type chatResponse struct {
 	Choices []struct {
 		Message Message `json:"message"`
+		// FinishReason "stop" 是模型自己写完了，"length" 是撞上 token 上限被截断。
+		// 不看这个的话，截断会伪装成"模型只给了 4 条"，方向全错。
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
@@ -172,6 +182,12 @@ func (c *Client) chat(ctx context.Context, msgs []Message, wantJSON bool) (strin
 	}
 	if len(parsed.Choices) == 0 {
 		return "", fmt.Errorf("模型没有返回内容")
+	}
+
+	if reason := parsed.Choices[0].FinishReason; reason != "" && reason != finishReasonStop {
+		logger.Warn("[chat] 模型不是正常结束",
+			zap.String("finish_reason", reason),
+			zap.Int("completion_tokens", parsed.Usage.CompletionTokens))
 	}
 
 	return parsed.Choices[0].Message.Content, nil
