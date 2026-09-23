@@ -24,7 +24,7 @@ func NewDB(dsn string, dev bool) (*gorm.DB, error) {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
 
-	if err := db.AutoMigrate(&model.Project{}, &model.Message{}, &model.PlanItem{}, &model.PathOption{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.Message{}); err != nil {
 		return nil, fmt.Errorf("自动建表失败: %w", err)
 	}
 

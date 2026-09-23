@@ -1,3 +1,4 @@
+// Package handler 把 HTTP 请求翻译成 service 调用，不放业务逻辑。
 package handler
 
 import (
@@ -13,198 +14,58 @@ import (
 )
 
 type ProjectHandler struct {
-	interview *service.InterviewService
-	path      *service.PathService
-	plan      *service.PlanService
+	projects *service.ProjectService
 }
 
-func NewProjectHandler(i *service.InterviewService, pa *service.PathService, pl *service.PlanService) *ProjectHandler {
-	return &ProjectHandler{interview: i, path: pa, plan: pl}
+func NewProjectHandler(p *service.ProjectService) *ProjectHandler {
+	return &ProjectHandler{projects: p}
 }
 
-type createReq struct {
-	// Idea 可以为空。为空就是入口 B：不知道能做什么，先进盘点。
-	Idea string `json:"idea"`
+type startReq struct {
+	Content string `json:"content"`
 }
 
-// Create POST /api/projects
-func (h *ProjectHandler) Create(c *gin.Context) {
-	var req createReq
-	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength > 0 {
+// Start POST /api/projects
+// 用户发出的第一句话就是建项目。入口只有一个，是「已经有想法」还是
+// 「还不知道能做什么」，交给模型从这句话里自己看，后端不做分支。
+func (h *ProjectHandler) Start(c *gin.Context) {
+	var req startReq
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求体格式不对")
 		return
 	}
 
-	p, err := h.interview.Start(c.Request.Context(), req.Idea)
+	detail, err := h.projects.Start(c.Request.Context(), req.Content)
 	if err != nil {
 		fail(c, err)
 		return
 	}
 
-	// 开场白要等模型十几秒，不放在这里。前端拿到 token 先跳转，再去要开场白。
-	response.OK(c, gin.H{
-		"project":     p,
-		"next_action": service.ActionOpening,
-	})
-}
-
-// Opening POST /api/projects/:token/opening
-func (h *ProjectHandler) Opening(c *gin.Context) {
-	p, question, next, err := h.interview.Opening(c.Request.Context(), c.Param("token"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
-
-	response.OK(c, gin.H{
-		"project":     p,
-		"question":    question,
-		"next_action": next,
-	})
-}
-
-type answerReq struct {
-	Content string `json:"content" binding:"required"`
-}
-
-// Answer POST /api/projects/:token/answers
-func (h *ProjectHandler) Answer(c *gin.Context) {
-	var req answerReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "content 不能为空")
-		return
-	}
-
-	p, question, next, err := h.interview.Answer(c.Request.Context(), c.Param("token"), req.Content)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-
-	response.OK(c, gin.H{
-		"project":  p,
-		"question": question,
-		// next_action: ask=继续答题，paths=去生成候选路径，plan=去生成方案
-		"next_action": next,
-		"done":        next != service.ActionAsk,
-	})
-}
-
-// GeneratePaths POST /api/projects/:token/paths
-// 入口 B：盘点完给 3 条能启动的路。用户点「够了」也走这里。
-func (h *ProjectHandler) GeneratePaths(c *gin.Context) {
-	p, paths, err := h.path.Generate(c.Request.Context(), c.Param("token"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	response.OK(c, gin.H{
-		"project": p,
-		"paths":   paths,
-	})
-}
-
-// SelectPath POST /api/projects/:token/paths/:id/select
-// 选一条，然后立刻合流回主干提问。
-func (h *ProjectHandler) SelectPath(c *gin.Context) {
-	p, question, next, err := h.path.Select(c.Request.Context(), c.Param("token"), c.Param("id"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	response.OK(c, gin.H{
-		"project":     p,
-		"question":    question,
-		"next_action": next,
-		"done":        next != service.ActionAsk,
-	})
-}
-
-// GeneratePlan POST /api/projects/:token/plan
-// 用户点「够了，先给我方案」也走这里。
-func (h *ProjectHandler) GeneratePlan(c *gin.Context) {
-	detail, err := h.plan.Generate(c.Request.Context(), c.Param("token"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
 	response.OK(c, detail)
 }
 
 // Detail GET /api/projects/:token
 func (h *ProjectHandler) Detail(c *gin.Context) {
-	detail, err := h.plan.Detail(c.Request.Context(), c.Param("token"))
+	detail, err := h.projects.Detail(c.Request.Context(), c.Param("token"))
 	if err != nil {
 		fail(c, err)
 		return
 	}
+
 	response.OK(c, detail)
 }
 
-type verifyReq struct {
-	Answer string `json:"answer" binding:"required"`
-}
-
-// Verify POST /api/projects/:token/items/:id/verify
-// 回填真实数据，这一条从黄/红变绿。
-func (h *ProjectHandler) Verify(c *gin.Context) {
-	var req verifyReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "answer 不能为空")
-		return
-	}
-
-	item, err := h.plan.Verify(c.Request.Context(), c.Param("token"), c.Param("id"), req.Answer)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-
-	detail, err := h.plan.Detail(c.Request.Context(), c.Param("token"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
-
-	response.OK(c, gin.H{
-		"item":     item,
-		"progress": detail.Progress,
-	})
-}
-
-// End POST /api/projects/:token/end
-func (h *ProjectHandler) End(c *gin.Context) {
-	p, err := h.plan.End(c.Request.Context(), c.Param("token"))
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	response.OK(c, gin.H{"project": p})
-}
-
+// fail 把 service 的错误翻译成 HTTP 响应。
+// 只有预期内的错误原样告诉用户，其余一律打日志兜成 500——
+// 内部错误直接抛给前端既没用又容易漏底。
 func fail(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
-		response.NotFound(c, "项目不存在或链接失效")
-	case errors.Is(err, service.ErrProjectEnded):
-		response.Conflict(c, "项目已结束")
-	case errors.Is(err, service.ErrNotAnswering):
-		response.Conflict(c, "当前阶段不需要回答问题")
-	case errors.Is(err, service.ErrNotScouting):
-		response.Conflict(c, "当前阶段不能生成候选路径")
-	case errors.Is(err, service.ErrNotChoosing):
-		response.Conflict(c, "当前阶段不能选择路径")
-	case errors.Is(err, service.ErrPathsIncomplete):
-		// 模型这次没凑够 3 条，重试一般就好了。
-		response.Conflict(c, "这次没能给齐 3 条路，再试一次")
-	case errors.Is(err, service.ErrMustChoosePath):
-		response.Conflict(c, "请先从候选路径里选一条")
-	case errors.Is(err, service.ErrEmptyAnswer):
-		response.BadRequest(c, "内容不能为空")
-	case errors.Is(err, service.ErrNoConversation):
-		response.BadRequest(c, "还没聊过，先回答几个问题")
+		response.NotFound(c, "这个项目不存在")
+	case errors.Is(err, service.ErrEmptyMessage):
+		response.BadRequest(c, err.Error())
 	default:
-		logger.Error("handler error", zap.Error(err), zap.String("path", c.Request.URL.Path))
+		logger.Error("[fail] 接口处理失败", zap.String("path", c.FullPath()), zap.Error(err))
 		response.ServerError(c, "服务开小差了，稍后再试")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/yes-man-engineer/baize_backend/internal/model"
 )
 
+// ErrNotFound 仓储层统一的「查不到」，上层据此返回 404。
 var ErrNotFound = errors.New("记录不存在")
 
 type ProjectRepo struct{ db *gorm.DB }

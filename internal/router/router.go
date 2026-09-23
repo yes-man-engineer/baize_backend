@@ -21,19 +21,8 @@ func New(dev bool, corsOrigins []string, h *handler.ProjectHandler) *gin.Engine 
 
 	api := r.Group("/api")
 	{
-		api.POST("/projects", h.Create)
-
-		p := api.Group("/projects/:token")
-		{
-			p.GET("", h.Detail)
-			p.POST("/opening", h.Opening)
-			p.POST("/answers", h.Answer)
-			p.POST("/paths", h.GeneratePaths)
-			p.POST("/paths/:id/select", h.SelectPath)
-			p.POST("/plan", h.GeneratePlan)
-			p.POST("/items/:id/verify", h.Verify)
-			p.POST("/end", h.End)
-		}
+		api.POST("/projects", h.Start)
+		api.GET("/projects/:token", h.Detail)
 	}
 
 	return r

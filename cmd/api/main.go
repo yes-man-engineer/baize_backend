@@ -13,7 +13,6 @@ import (
 
 	"github.com/yes-man-engineer/baize_backend/internal/config"
 	"github.com/yes-man-engineer/baize_backend/internal/handler"
-	"github.com/yes-man-engineer/baize_backend/internal/llm"
 	"github.com/yes-man-engineer/baize_backend/internal/repository"
 	"github.com/yes-man-engineer/baize_backend/internal/router"
 	"github.com/yes-man-engineer/baize_backend/internal/service"
@@ -36,24 +35,12 @@ func main() {
 		logger.Warn("LLM_API_KEY 为空，涉及模型的接口会直接报错")
 	}
 
-	projectRepo := repository.NewProjectRepo(db)
-	messageRepo := repository.NewMessageRepo(db)
-	itemRepo := repository.NewPlanItemRepo(db)
-	pathRepo := repository.NewPathOptionRepo(db)
-
-	ai := llm.NewClient(
-		cfg.LLMBaseURL,
-		cfg.LLMAPIKey,
-		cfg.LLMModel,
-		cfg.LLMTemperature,
-		time.Duration(cfg.LLMTimeoutSeconds)*time.Second,
+	projectSvc := service.NewProjectService(
+		repository.NewProjectRepo(db),
+		repository.NewMessageRepo(db),
 	)
 
-	interviewSvc := service.NewInterviewService(projectRepo, messageRepo, ai)
-	pathSvc := service.NewPathService(projectRepo, messageRepo, pathRepo, interviewSvc, ai)
-	planSvc := service.NewPlanService(projectRepo, messageRepo, itemRepo, pathRepo, ai)
-
-	r := router.New(cfg.IsDev(), cfg.CORSOrigins, handler.NewProjectHandler(interviewSvc, pathSvc, planSvc))
+	r := router.New(cfg.IsDev(), cfg.CORSOrigins, handler.NewProjectHandler(projectSvc))
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,
