@@ -134,13 +134,13 @@ GET 详情也返回它，前端刷新页面不用自己按 status 猜。
 
 ## 当前状态
 
-- **编译通过**（Go 1.26 实测）、`go vet` 干净、`gofmt` 干净
-- **单元测试覆盖三条最要命的规则**：亏损上限解析、置信度降级、3 条路径拉开
-  （`internal/service/*_test.go`、`internal/middleware/cors_test.go`）
-- **compose 全栈实测起得来**：MySQL healthy → AutoMigrate 建出 4 张表 →
-  `/health` 200 → 开项目落库正确。走模型的接口还没验（缺 key）
-- 代码**仍未提交**（`git status` 一堆 untracked）
-- 远端 `main` 是重置后的空骨架单条提交
+线上跑在 `create-biz.baizelabs.cn`，模型是 Kimi `kimi-k2.6`，入口 A 全流程
+实测跑通：开项目 → 开场白 → 答几轮 → 出方案（10 条，green/yellow/red 都有）。
+
+- 编译、`go vet`、`gofmt` 干净
+- 单测覆盖三条最要命的规则（`internal/service/*_test.go`、
+  `internal/middleware/cors_test.go`）。`parseHours` 是新加的，还没有单测
+- 耗时：开场白 8-20 秒，每轮提问 20-26 秒，生成方案约 99 秒
 
 ## 五条规则的代码落点
 
@@ -148,7 +148,7 @@ GET 详情也返回它，前端刷新页面不用自己按 status 猜。
 
 | 规则 | 代码位置 |
 | --- | --- |
-| 1 第一问是亏损上限 | `service.FirstQuestion`；`parseMoney` 只在第一轮采信裸数字 |
+| 1 预算必须问到 | 模型抽 `extracted.budget`；`parseMoney` 兜底只认带单位的 |
 | 2 固定 3 条路径 | `PathService.Generate` 不足 3 条报错；`spreadAngles` 保证角度互不相同 |
 | 3 可以「先别做」 | `stopSections` —— stop 时只落止损类条目，执行方案一条不落 |
 | 4 本地信息不许 green | `localHints` + `normalizeItem`，命中就降 red（宁可误伤不许漏判） |
@@ -156,6 +156,23 @@ GET 详情也返回它，前端刷新页面不用自己按 status 猜。
 
 另外 `normalizeItem` 还守着：yellow 必须带 assumption，带不出来降 red——
 没有假设的黄色就是一张空清单，而"带假设比空清单好"是整个机制的立足点。
+
+## 写 prompt 的一条教训
+
+**不要在 prompt 里写带引号的完整例句。** 模型会把例句当成该输出的答案直接吐
+出来，绕过 JSON 包装，`extractJSON` 连花括号都找不到，只能抛 500。
+
+2026-09-23 踩过一次：为了焊死预算的措辞，规则里写了
+`问法只能是投入："这事你打算先投多少钱进去"`，模型走到问预算那一轮就原样
+复读这句纯文本。**这不是随机抖动**——同样的 prompt 每次都稳定诱导同样的
+输出，所以原样重发的重试一次都救不回来，三次全挂。
+
+改法是例句只给方向（"问法落在'打算投入多少'这个方向上，具体措辞你自己
+组织"），并在输出格式那段收口：整个回复必须以 `{` 开头 `}` 结尾，要说的话
+放进 `question` 字段，上面出现的例句都不是让你照抄的答案。
+
+`ChatJSON` 的重试也因此改成追加纠正消息而不是原样重发——原样重发对这类
+系统性错误无效，只有明确告诉模型"上次错在哪"才有意义。
 
 ## 部署
 
