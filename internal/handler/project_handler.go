@@ -35,7 +35,22 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 		return
 	}
 
-	p, question, err := h.interview.Start(c.Request.Context(), req.Idea)
+	p, err := h.interview.Start(c.Request.Context(), req.Idea)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+
+	// 开场白要等模型十几秒，不放在这里。前端拿到 token 先跳转，再去要开场白。
+	response.OK(c, gin.H{
+		"project":     p,
+		"next_action": service.ActionOpening,
+	})
+}
+
+// Opening POST /api/projects/:token/opening
+func (h *ProjectHandler) Opening(c *gin.Context) {
+	p, question, next, err := h.interview.Opening(c.Request.Context(), c.Param("token"))
 	if err != nil {
 		fail(c, err)
 		return
@@ -44,7 +59,7 @@ func (h *ProjectHandler) Create(c *gin.Context) {
 	response.OK(c, gin.H{
 		"project":     p,
 		"question":    question,
-		"next_action": service.ActionAsk,
+		"next_action": next,
 	})
 }
 

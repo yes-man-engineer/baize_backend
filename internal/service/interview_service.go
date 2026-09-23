@@ -31,6 +31,8 @@ var (
 type NextAction string
 
 const (
+	// ActionOpening 项目刚建好，还差一句开场白
+	ActionOpening NextAction = "opening"
 	// ActionAsk 继续回答问题
 	ActionAsk NextAction = "ask"
 	// ActionPaths 去生成 3 条候选路径（入口 B 盘点完）
@@ -39,17 +41,14 @@ const (
 	ActionPlan NextAction = "plan"
 )
 
-// FirstQuestion 开场的兜底问法：入口 B 没有想法可接，以及模型没生成出开场白时用。
-// 无论谁来写这句，第一个问题问的都是这笔预算，这是产品底线：
-// 这个数字决定整份方案的大小，不交给模型决定。
-//
-// 用投入的说法而不是亏损的说法。同一个数字，问"打算拿多少出来试"用户答得诚实，
-// 问"最多能亏多少"像是在让他设想自己失败，一上来就泼冷水。
-const FirstQuestion = "先问个最要紧的：你打算先拿多少钱出来试试？就当这笔钱打了水漂，也不影响正常过日子的那种。"
+// 开场白生成不出来时的兜底问法。开场不问钱，预算由模型在聊天里挑时机问。
+const (
+	fallbackOpeningHasIdea = "先说说看，这事你打算在哪儿做？"
+	fallbackOpeningNoIdea  = "先随便聊聊——你现在平时都在忙些什么？"
+)
 
-// openingTimeout 开场白卡在「开始」按钮上，用户在等，宁可退回固定问法也不让他干等。
-// 实测这一句要 11 到 15 秒，Kimi 光首字延迟就吃掉大半，留一倍余量。
-// 调小会频繁降级成固定问法，而降级了页面上看不出来，只有日志里有。
+// openingTimeout 开场白卡在对话页的等待上，宁可退回固定问法也不让用户干等。
+// 实测这一句要 8 到 20 秒，大半吃在首字延迟上，留一倍余量。
 const openingTimeout = 30 * time.Second
 
 // firstRound 是提问的第一轮，AskedCount 从 1 开始计。
@@ -66,10 +65,10 @@ func NewInterviewService(p *repository.ProjectRepo, m *repository.MessageRepo, a
 }
 
 // Start 开一个新项目。idea 为空表示走入口 B（不知道能做什么），先进盘点。
-func (s *InterviewService) Start(ctx context.Context, idea string) (*model.Project, string, error) {
+func (s *InterviewService) Start(ctx context.Context, idea string) (*model.Project, error) {
 	token, err := newToken()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	idea = strings.TrimSpace(idea)
@@ -87,52 +86,77 @@ func (s *InterviewService) Start(ctx context.Context, idea string) (*model.Proje
 		WeeklyHours: -1,
 	}
 	if err := s.projects.Create(ctx, p); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	if idea != "" {
 		if err := s.messages.Create(ctx, &model.Message{
 			ProjectID: p.ID, Role: model.RoleUser, Content: idea,
 		}); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
-	question := FirstQuestion
-	if idea != "" {
-		question = s.openingQuestion(ctx, idea)
+	return p, nil
+}
+
+// Opening 生成开场白。跟建项目分开是因为这一步要等模型十几秒，
+// 而前端需要拿到 token 立刻跳转，把等待放在对话页里展示。
+// 重复调用直接返回已有的那句，不会重复生成。
+func (s *InterviewService) Opening(ctx context.Context, token string) (*model.Project, string, NextAction, error) {
+	p, err := s.projects.GetByToken(ctx, token)
+	if err != nil {
+		return nil, "", "", err
 	}
 
+	history, err := s.messages.ListByProject(ctx, p.ID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	for _, m := range history {
+		if m.Role == model.RoleAssistant {
+			return p, m.Content, ActionAsk, nil
+		}
+	}
+
+	question := s.openingQuestion(ctx, p)
 	if err := s.messages.Create(ctx, &model.Message{
 		ProjectID: p.ID, Role: model.RoleAssistant, Content: question,
 	}); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	p.AskedCount = firstRound
 	if err := s.projects.Save(ctx, p); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
-	return p, question, nil
+	return p, question, ActionAsk, nil
 }
 
-// openingQuestion 让模型接住用户那句想法再问预算，问的仍然只能是预算。
-// 生成不出来就退回 FirstQuestion，开场绝不会问成别的事。
-func (s *InterviewService) openingQuestion(ctx context.Context, idea string) string {
+// openingQuestion 入口 A 让模型接住用户那句想法，入口 B 直接进盘点。
+// 生成不出来就退回固定问法，不让用户卡在这里。
+func (s *InterviewService) openingQuestion(ctx context.Context, p *model.Project) string {
 	ctx, cancel := context.WithTimeout(ctx, openingTimeout)
 	defer cancel()
 
+	fallback := fallbackOpeningNoIdea
+	msgs := llm.ScoutMessages(nil)
+	if p.Idea != "" {
+		fallback = fallbackOpeningHasIdea
+		msgs = llm.OpeningMessages(p.Idea)
+	}
+
 	var r llm.OpeningResult
-	if err := s.ai.ChatJSON(ctx, llm.OpeningMessages(idea), &r); err != nil {
+	if err := s.ai.ChatJSON(ctx, msgs, &r); err != nil {
 		logger.Warn("[openingQuestion] 开场白生成失败，回退固定问法", zap.Error(err))
-		return FirstQuestion
+		return fallback
 	}
 
 	if q := strings.TrimSpace(r.Question); q != "" {
 		return q
 	}
-	return FirstQuestion
+	return fallback
 }
 
 // Answer 收下用户的回答，返回下一个问题和下一步动作。
@@ -159,12 +183,11 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 		return nil, "", "", err
 	}
 
-	// 第一轮回答的是亏损上限，自己解析，不走模型。
-	// 只有第一轮才采信不带单位的裸数字：后面几轮用户聊的是城市、干了几年、
-	// 每周几小时，裸数字抓过来会把亏损上限污染成 3 元、35 元这种荒谬值，
-	// 而这个数会原样进 prompt 决定整份方案的大小。
+	// 预算兜底：模型漏抽时自己从这句话里捞一次，只认带单位的（"3000块""5千"）。
+	// 不认裸数字——预算问在第几轮不固定了，无从判断"35"是预算还是年龄、小时数，
+	// 而这个数会原样进 prompt 决定整份方案的大小。裸数字交给模型抽，它知道自己刚问了什么。
 	if p.RiskBudget < 0 {
-		if n, ok := parseMoney(content, p.AskedCount == firstRound); ok {
+		if n, ok := parseMoney(content, false); ok {
 			p.RiskBudget = n
 		}
 	}
@@ -234,6 +257,9 @@ func (s *InterviewService) askInterview(ctx context.Context, p *model.Project, h
 	if e.WeeklyHours > 0 {
 		p.WeeklyHours = e.WeeklyHours
 	}
+	if e.Budget > 0 {
+		p.RiskBudget = e.Budget
+	}
 
 	q := strings.TrimSpace(r.Question)
 	return q, r.Done || q == "", r.IdeaTooVague, nil
@@ -252,6 +278,9 @@ func (s *InterviewService) askScout(ctx context.Context, p *model.Project, histo
 	}
 	if e.WeeklyHours > 0 {
 		p.WeeklyHours = e.WeeklyHours
+	}
+	if e.Budget > 0 {
+		p.RiskBudget = e.Budget
 	}
 	p.Assets = appendFact(p.Assets, e.Assets)
 	p.Experience = appendFact(p.Experience, e.Experience)
@@ -324,8 +353,8 @@ func parseMoney(s string, allowBare bool) (int, bool) {
 }
 
 // smallestWithUnit 取所有带单位金额里最小的那个。
-// "我有2万存款，最多亏5千"这种一句话里出现多个数，往小了取更安全：
-// 方案做小了用户顶多觉得保守，做大了是真亏钱。
+// "我有2万存款，先拿5千出来试"这种一句话里出现多个数，往小了取更安全：
+// 方案做小了用户顶多觉得保守，做大了他掏不出这笔钱。
 func smallestWithUnit(s string) (int, bool) {
 	ms := moneyWithUnitRe.FindAllStringSubmatch(s, -1)
 	if len(ms) == 0 {

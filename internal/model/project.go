@@ -48,7 +48,7 @@ type Project struct {
 	// 提问阶段沉淀下来的结构化事实
 	Idea        string `gorm:"type:varchar(500)" json:"idea"`
 	City        string `gorm:"type:varchar(200)" json:"city"`
-	RiskBudget  int    `gorm:"not null;default:-1" json:"risk_budget"`  // 最多能亏多少钱（元），-1 表示还没问到
+	RiskBudget  int    `gorm:"not null;default:-1" json:"risk_budget"`  // 打算投入的预算（元），-1 表示还没问到
 	WeeklyHours int    `gorm:"not null;default:-1" json:"weekly_hours"` // 每周能投入几小时，-1 表示还没问到
 
 	// 入口 B 的盘点结果。创业的起点不是「我会什么」，是「我手上现成有什么」。

@@ -210,9 +210,9 @@ func profileText(p *model.Project, history []model.Message) string {
 		b.WriteString("所在地点: " + p.City + "\n")
 	}
 	if p.RiskBudget >= 0 {
-		b.WriteString(fmt.Sprintf("最多能亏: %d 元（每条路径的启动投入都不得超过这个数）\n", p.RiskBudget))
+		b.WriteString(fmt.Sprintf("预算: %d 元（每条路径的启动投入都不得超过这个数）\n", p.RiskBudget))
 	} else {
-		b.WriteString("最多能亏: 未知（按最保守的口径给，启动投入控制在几千元以内）\n")
+		b.WriteString("预算: 未知（按最保守的口径给，启动投入控制在几千元以内）\n")
 	}
 	if p.WeeklyHours > 0 {
 		b.WriteString(fmt.Sprintf("每周投入: %d 小时\n", p.WeeklyHours))

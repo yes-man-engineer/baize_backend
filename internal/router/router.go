@@ -26,6 +26,7 @@ func New(dev bool, corsOrigins []string, h *handler.ProjectHandler) *gin.Engine 
 		p := api.Group("/projects/:token")
 		{
 			p.GET("", h.Detail)
+			p.POST("/opening", h.Opening)
 			p.POST("/answers", h.Answer)
 			p.POST("/paths", h.GeneratePaths)
 			p.POST("/paths/:id/select", h.SelectPath)

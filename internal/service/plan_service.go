@@ -145,7 +145,7 @@ func (s *PlanService) Generate(ctx context.Context, token string) (*Detail, erro
 	p.Verdict = verdict
 	p.VerdictReason = strings.TrimSpace(result.VerdictReason)
 	if verdict == model.VerdictStop && p.VerdictReason == "" {
-		p.VerdictReason = "以你现在的情况，先别急着投钱。先找份稳定的收入，攒够亏得起的钱再回来。"
+		p.VerdictReason = "以你现在的情况，先别急着投钱。先找份稳定的收入，攒够本钱再回来。"
 	}
 	p.Status = model.StatusPlanned
 	if err := s.projects.Save(ctx, p); err != nil {
@@ -274,6 +274,9 @@ func (s *PlanService) Detail(ctx context.Context, token string) (*Detail, error)
 func nextActionFor(p *model.Project) NextAction {
 	switch p.Status {
 	case model.StatusScouting, model.StatusInterviewing:
+		if p.AskedCount == 0 {
+			return ActionOpening
+		}
 		return ActionAsk
 	case model.StatusChoosing:
 		return ActionPaths
@@ -294,9 +297,9 @@ func transcript(p *model.Project, history []model.Message) string {
 		b.WriteString("所在地点: " + p.City + "\n")
 	}
 	if p.RiskBudget >= 0 {
-		b.WriteString(fmt.Sprintf("最多能亏: %d 元（方案的投入不得超过这个数）\n", p.RiskBudget))
+		b.WriteString(fmt.Sprintf("预算: %d 元（方案的投入不得超过这个数）\n", p.RiskBudget))
 	} else {
-		b.WriteString("最多能亏: 未知（按最保守的口径给方案）\n")
+		b.WriteString("预算: 未知（按最保守的口径给方案）\n")
 	}
 	if p.WeeklyHours > 0 {
 		b.WriteString(fmt.Sprintf("每周投入: %d 小时\n", p.WeeklyHours))
