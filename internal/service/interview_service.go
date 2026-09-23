@@ -48,8 +48,9 @@ const (
 const FirstQuestion = "先问个最要紧的：你打算先拿多少钱出来试试？就当这笔钱打了水漂，也不影响正常过日子的那种。"
 
 // openingTimeout 开场白卡在「开始」按钮上，用户在等，宁可退回固定问法也不让他干等。
-// 这里只生成一句话，正常两三秒就回来了。
-const openingTimeout = 15 * time.Second
+// 实测这一句要 11 到 15 秒，Kimi 光首字延迟就吃掉大半，留一倍余量。
+// 调小会频繁降级成固定问法，而降级了页面上看不出来，只有日志里有。
+const openingTimeout = 30 * time.Second
 
 // firstRound 是提问的第一轮，AskedCount 从 1 开始计。
 const firstRound = 1
