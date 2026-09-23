@@ -171,8 +171,38 @@ GET 详情也返回它，前端刷新页面不用自己按 status 猜。
 nginx 把 `/api/` 反代到 `127.0.0.1:8080`。前端 `VITE_API_BASE` 默认就是 `/api`
 走同源，所以后端 `CORS_ORIGINS` 留空即可。
 
-**坑**：国内云主机连不上 proxy.golang.org（i/o timeout），必须先
-`go env -w GOPROXY=https://goproxy.cn,direct`，否则 `go build` 卡死在下载依赖。
+### 三个踩过的坑
+
+**一、Go 拉不到依赖。** 国内云主机连不上 proxy.golang.org（i/o timeout），
+必须先 `go env -w GOPROXY=https://goproxy.cn,direct`，否则 `go build`
+卡死在下载依赖。
+
+**二、nginx 默认 60 秒会掐断大模型请求。** `proxy_read_timeout` 不配就是
+默认 60 秒，而生成方案实测要 99 秒。表现是浏览器拿到 504，后端却还在跑，
+日志里一切正常——只改后端的 `LLM_TIMEOUT_SECONDS` 永远查不出来，那个值
+在外层被 nginx 切断之后根本不起作用。两个超时必须一起设，且 Go 侧要比
+nginx 小，这样超时一定由内层主动抛出，日志里能看到是哪次调用超的。
+
+**三、`index.html` 被缓存会让前端发版不生效。** nginx 不配 `Cache-Control`
+就不发这个头，浏览器于是按启发式规则自己缓存。`index.html` 决定加载哪个
+bundle，它一被缓存，后端发了新版用户也只会拿到旧 JS。症状极其难反推：
+新后端配旧前端，界面会出现各种说不通的错乱（实测是新的 `next_action`
+状态旧代码不认识，直接跳到了流程末尾），而服务器上查什么都是对的。
+
+nginx 里这三段是配套的，缺一不可：
+
+```nginx
+location /api/ {
+    proxy_read_timeout 1260s;   # 必须大于后端的 LLM_TIMEOUT_SECONDS
+    proxy_send_timeout 1260s;
+}
+location = /index.html {
+    add_header Cache-Control "no-cache";
+}
+location /assets/ {             # 文件名带内容 hash，长缓存是安全的
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}
+```
 
 **安全底线**（这台机器 2026-07 因此被删过库，别再犯）：
 
@@ -184,14 +214,12 @@ nginx 把 `/api/` 反代到 `127.0.0.1:8080`。前端 `VITE_API_BASE` 默认就�
 
 ## 待办，按优先级
 
-1. **接真实模型跑通一遍**：填 `.env` 的 `LLM_API_KEY`，
-   `docker compose up -d`，走一遍入口 A 全流程（开项目 → 答几轮 → 出方案 → 回填变绿）。
-   重点看 prompt 的实际表现：green/yellow/red 分得准不准、
-   `verify_action` 是不是真的今晚两小时能做完。
-2. **提交代码**。目前全是 untracked。
-3. **前端**（`baize_frontend` 仓库）目前是 Vite+React19+TS 的空骨架，
-   Tailwind / shadcn 都没装。需要：API 地址配置 `VITE_API_BASE`、
-   对话页、方案文档+任务板双视图、绿色占比。
+1. **流式输出**。现在开场白要等 8 到 20 秒、每轮提问 26 秒、生成方案 99 秒，
+   全程只有一个转圈加秒数。首字一出来就往外推的话，用户 2 秒就能看到字在动，
+   感知上的差别比省几秒大得多。障碍是所有调用都走 `ChatJSON`，
+   拿到的是逐步变长的 JSON 字符串，没法直接渲染，得先把纯文本的部分拆出来。
+2. **`parseHours` 补单测**。旁边的 `parseMoney` 有 `TestParseMoney`，
+   这个新加的兜底还没有。
 
 ## 还没设计的（产品层，不是技术问题）
 
