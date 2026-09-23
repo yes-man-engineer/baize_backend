@@ -269,6 +269,11 @@ func (s *InterviewService) askInterview(ctx context.Context, p *model.Project, h
 	}
 
 	q := strings.TrimSpace(r.Question)
+	// 打出来是为了能查：模型到底有没有按规则把问题挂到方案的某个格子上，
+	// 还是在问换任何行当都成立的通用问题。挂不上就说明提问又退化成填表了。
+	logger.Info("[askInterview] 提问",
+		zap.String("hooked_item", r.HookedItem), zap.String("question", q))
+
 	return q, r.Done || q == "", r.IdeaTooVague, nil
 }
 
