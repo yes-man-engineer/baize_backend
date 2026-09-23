@@ -20,9 +20,14 @@ import (
 // 超时、网络失败、额度不足再要一遍也是一样的结果，白等一轮。
 var errBadJSON = errors.New("模型返回的不是 JSON")
 
-// chatJSONAttempts 含首次在内的总次数。实测 kimi-k2.6 偶尔直接吐大白话，
-// 重试一次基本就能过，与其把 500 抛给用户不如自己再要一遍。
-const chatJSONAttempts = 2
+// chatJSONAttempts 含首次在内的总次数。
+const chatJSONAttempts = 3
+
+// jsonRepairPrompt 重试时追加。原样重发没有意义：模型是被 prompt 稳定诱导
+// 才吐的大白话，同样的输入只会得到同样的输出，必须明确告诉它上一次错在哪。
+const jsonRepairPrompt = "你刚才的回复不是 JSON，已被丢弃。" +
+	"重新回答一次，整个回复必须是一个 JSON 对象，以 { 开头、以 } 结尾，" +
+	"不要有任何额外文字。你要说的话放进 question 字段里。"
 
 type Role string
 
@@ -83,7 +88,13 @@ type chatResponse struct {
 func (c *Client) ChatJSON(ctx context.Context, msgs []Message, out any) error {
 	var err error
 	for attempt := 1; attempt <= chatJSONAttempts; attempt++ {
-		err = c.chatJSONOnce(ctx, msgs, out)
+		attemptMsgs := msgs
+		if attempt > 1 {
+			attemptMsgs = append(append([]Message{}, msgs...),
+				Message{Role: RoleUser, Content: jsonRepairPrompt})
+		}
+
+		err = c.chatJSONOnce(ctx, attemptMsgs, out)
 		if err == nil {
 			return nil
 		}
