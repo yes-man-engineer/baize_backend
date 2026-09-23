@@ -177,12 +177,6 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 		return nil, "", "", ErrNotAnswering
 	}
 
-	if err := s.messages.Create(ctx, &model.Message{
-		ProjectID: p.ID, Role: model.RoleUser, Content: content,
-	}); err != nil {
-		return nil, "", "", err
-	}
-
 	// 预算兜底：模型漏抽时自己从这句话里捞一次，只认带单位的（"3000块""5千"）。
 	// 不认裸数字——预算问在第几轮不固定了，无从判断"35"是预算还是年龄、小时数，
 	// 而这个数会原样进 prompt 决定整份方案的大小。裸数字交给模型抽，它知道自己刚问了什么。
@@ -191,11 +185,20 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 			p.RiskBudget = n
 		}
 	}
+	if p.WeeklyHours < 0 {
+		if n, ok := parseHours(content); ok {
+			p.WeeklyHours = n
+		}
+	}
 
 	history, err := s.messages.ListByProject(ctx, p.ID)
 	if err != nil {
 		return nil, "", "", err
 	}
+	// 这一轮的回答先只挂在内存里给模型看。模型调用失败时用户会重发，
+	// 提前落库的话库里会留下两条一样的。
+	answer := model.Message{ProjectID: p.ID, Role: model.RoleUser, Content: content}
+	history = append(history, answer)
 
 	var question string
 	var done bool
@@ -214,6 +217,10 @@ func (s *InterviewService) Answer(ctx context.Context, token, content string) (*
 		}
 	}
 	if err != nil {
+		return nil, "", "", err
+	}
+
+	if err := s.messages.Create(ctx, &answer); err != nil {
 		return nil, "", "", err
 	}
 
@@ -325,12 +332,40 @@ func toLLM(list []model.Message) []llm.Message {
 var moneyWithUnitRe = regexp.MustCompile(
 	`([0-9]+(?:\.[0-9]+)?|[零一二两三四五六七八九十]+)\s*(万元|千元|万|千|w|W|k|K|块钱|块|元)`)
 
+// 时间单位。和金额一样只认带单位的，"35岁""3年"抓不进来。
+var hoursWithUnitRe = regexp.MustCompile(
+	`([0-9]+(?:\.[0-9]+)?|[零一二两三四五六七八九十]+)\s*(?:个)?\s*(?:小时|钟头|h|H)`)
+
 // 不带单位的裸数字，只在明确问钱的那一轮才敢采信。
 var bareNumberRe = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
 
 var cnDigits = map[rune]int{
 	'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
 	'五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+}
+
+// maxWeeklyHours 一周的小时数。超过这个数说明抓错了，比如把价钱当成了工时。
+const maxWeeklyHours = 168
+
+// parseHours 从"二十个小时""20小时"里抠出每周能投入的小时数。
+// 模型漏抽时兜一次。只认带单位的，裸数字在这几轮里更可能是年龄、价钱。
+// 一句话里有多个数就取最小的，理由和金额一样：估少了方案偏保守，估多了做不完。
+func parseHours(s string) (int, bool) {
+	ms := hoursWithUnitRe.FindAllStringSubmatch(s, -1)
+	best, found := 0.0, false
+	for _, m := range ms {
+		v, ok := toFloat(m[1])
+		if !ok || v <= 0 || v > maxWeeklyHours {
+			continue
+		}
+		if !found || v < best {
+			best, found = v, true
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	return int(best), true
 }
 
 // parseMoney 从"5000块""1万左右""三五千""2w"里抠出一个数字（元）。

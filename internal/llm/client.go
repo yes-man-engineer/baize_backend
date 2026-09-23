@@ -4,12 +4,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
+
+// errBadJSON 模型没按 response_format 返回 JSON。只有这种错值得重试，
+// 超时、网络失败、额度不足再要一遍也是一样的结果，白等一轮。
+var errBadJSON = errors.New("模型返回的不是 JSON")
+
+// chatJSONAttempts 含首次在内的总次数。实测 kimi-k2.6 偶尔直接吐大白话，
+// 重试一次基本就能过，与其把 500 抛给用户不如自己再要一遍。
+const chatJSONAttempts = 2
 
 type Role string
 
@@ -66,8 +79,24 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
-// ChatJSON 让模型返回 JSON 并反序列化到 out。
+// ChatJSON 让模型返回 JSON 并反序列化到 out，格式不对会重试。
 func (c *Client) ChatJSON(ctx context.Context, msgs []Message, out any) error {
+	var err error
+	for attempt := 1; attempt <= chatJSONAttempts; attempt++ {
+		err = c.chatJSONOnce(ctx, msgs, out)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errBadJSON) {
+			return err
+		}
+		logger.Warn("[ChatJSON] 模型没按 JSON 返回，重试",
+			zap.Int("attempt", attempt), zap.Error(err))
+	}
+	return err
+}
+
+func (c *Client) chatJSONOnce(ctx context.Context, msgs []Message, out any) error {
 	raw, err := c.chat(ctx, msgs, true)
 	if err != nil {
 		return err
@@ -75,10 +104,10 @@ func (c *Client) ChatJSON(ctx context.Context, msgs []Message, out any) error {
 
 	cleaned := extractJSON(raw)
 	if cleaned == "" {
-		return fmt.Errorf("模型返回里找不到 JSON: %s", truncate(raw, 300))
+		return fmt.Errorf("%w，原文: %s", errBadJSON, truncate(raw, 300))
 	}
 	if err := json.Unmarshal([]byte(cleaned), out); err != nil {
-		return fmt.Errorf("解析模型 JSON 失败: %w，原文: %s", err, truncate(cleaned, 300))
+		return fmt.Errorf("%w: %v，原文: %s", errBadJSON, err, truncate(cleaned, 300))
 	}
 	return nil
 }
