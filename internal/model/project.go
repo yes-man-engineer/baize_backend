@@ -57,11 +57,11 @@ func (f *Facts) Scan(src any) error {
 	return json.Unmarshal(b, f)
 }
 
-// Project 没有账号体系，Token 就是访问凭证，前端存在链接里。
+// Project 没有账号体系，ID 就是访问凭证：拿到这串 uuid 就能看这个项目。
+// uuid v4 有 122 位随机，猜不出来，不必再单设一个凭证列——
+// 这个项目里 token 一词已经被大模型的 prompt_tokens / completion_tokens 占了。
 type Project struct {
 	Base
-
-	Token string `gorm:"type:char(32);uniqueIndex;not null" json:"token"`
 
 	// UserID 现在恒为空。留着是为了将来接上账号时，老项目还能认领回去——
 	// 那时候再加列，已有的行就没法回填归属了。

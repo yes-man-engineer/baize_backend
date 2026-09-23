@@ -3,8 +3,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -14,14 +12,8 @@ import (
 
 var ErrEmptyMessage = errors.New("第一句话不能为空")
 
-const (
-	// tokenBytes 16 字节 → 32 位十六进制。没有账号体系，这串就是访问凭证，
-	// 必须用 crypto/rand，猜得到就等于别人能翻你的项目。
-	tokenBytes = 16
-
-	// titleRunes 标题截断长度，按字符不按字节，否则中文会被截半个。
-	titleRunes = 24
-)
+// titleRunes 标题截断长度，按字符不按字节，否则中文会被截半个。
+const titleRunes = 24
 
 type ProjectService struct {
 	projects *repository.ProjectRepo
@@ -48,13 +40,7 @@ func (s *ProjectService) Start(ctx context.Context, content string) (*Detail, er
 		return nil, ErrEmptyMessage
 	}
 
-	token, err := newToken()
-	if err != nil {
-		return nil, err
-	}
-
 	project := &model.Project{
-		Token:  token,
 		Status: model.StatusChatting,
 		Title:  truncate(content, titleRunes),
 		Facts:  model.Facts{},
@@ -75,8 +61,8 @@ func (s *ProjectService) Start(ctx context.Context, content string) (*Detail, er
 	return &Detail{Project: project, Messages: []model.Message{*first}}, nil
 }
 
-func (s *ProjectService) Detail(ctx context.Context, token string) (*Detail, error) {
-	project, err := s.projects.GetByToken(ctx, token)
+func (s *ProjectService) Detail(ctx context.Context, id string) (*Detail, error) {
+	project, err := s.projects.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -87,14 +73,6 @@ func (s *ProjectService) Detail(ctx context.Context, token string) (*Detail, err
 	}
 
 	return &Detail{Project: project, Messages: messages}, nil
-}
-
-func newToken() (string, error) {
-	buf := make([]byte, tokenBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
 }
 
 // truncate 按字符截断，超长补省略号。

@@ -20,9 +20,9 @@ func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	return r.db.WithContext(ctx).Create(p).Error
 }
 
-func (r *ProjectRepo) GetByToken(ctx context.Context, token string) (*model.Project, error) {
+func (r *ProjectRepo) GetByID(ctx context.Context, id string) (*model.Project, error) {
 	var p model.Project
-	err := r.db.WithContext(ctx).Where("token = ?", token).First(&p).Error
+	err := r.db.WithContext(ctx).Where("id = ?", id).First(&p).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrNotFound
 	}

@@ -44,9 +44,9 @@ func (h *ProjectHandler) Start(c *gin.Context) {
 	response.OK(c, detail)
 }
 
-// Detail GET /api/projects/:token
+// Detail GET /api/projects/:id
 func (h *ProjectHandler) Detail(c *gin.Context) {
-	detail, err := h.projects.Detail(c.Request.Context(), c.Param("token"))
+	detail, err := h.projects.Detail(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		fail(c, err)
 		return

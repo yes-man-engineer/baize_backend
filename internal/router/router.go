@@ -22,7 +22,7 @@ func New(dev bool, corsOrigins []string, h *handler.ProjectHandler) *gin.Engine 
 	api := r.Group("/api")
 	{
 		api.POST("/projects", h.Start)
-		api.GET("/projects/:token", h.Detail)
+		api.GET("/projects/:id", h.Detail)
 	}
 
 	return r
