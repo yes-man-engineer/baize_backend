@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -130,7 +131,7 @@ func (s *PlanService) Generate(ctx context.Context, token string) (*Detail, erro
 		}
 		// 只规范模型新生成的条目。已核实的条目是用户填的事实，
 		// 要是也走一遍降级，"摊位费 80 一天"会被关键词打回 red。
-		normalizeItem(&item)
+		normalizeItem(&item, p.City)
 		items = append(items, item)
 	}
 
@@ -341,18 +342,31 @@ var stopSections = map[string]bool{
 	"成本毛利": true,
 }
 
-// localHints 这些词一出现，就说明这条依赖"某市某区某条街"的实地情况。
-// 互联网上不存在这个颗粒度的数据，标成 green 就是装懂，
-// 本地用户一眼就能看穿，看穿一次信任归零。宁可误伤也不漏判：
-// 误伤只是多一条要用户去核实的，漏判丢的是整个产品的立身之本。
-var localHints = []string{
-	"人流", "客流", "人气", "摊位费", "租金", "房租", "城管",
-	"竞争", "同行", "对手", "附近", "周边", "这条街", "那条街",
-	"隔壁", "对面", "日均", "几个摊", "几家店", "生意最好",
+// 规则 4 的词表。原来是一张大表做全文匹配，命中任何一个词就把 green 打成 red，
+// 结果误伤率接近 100%：真正有价值的干货必然会顺口提到城管、客流、同行。
+// 实测一条纯通用的产能计算（"60cm烤炉单层摆20-25串，单人稳态每晚80-120串"）
+// 只因为正文里有"考虑客流间隙"四个字就被打成 red，用户看到的就是满屏待办没有干货。
+// 现在拆成两类：本身就是本地事实的单独出现就降，只是话题词的必须带地点指代才降。
+
+// localFacts 本身就是"某个具体地方多少钱"，单独出现就够。
+var localFacts = []string{"摊位费", "租金", "房租"}
+
+// localTopics 只是话题，本身不构成本地断言。
+// "考虑客流间隙"是通用产能计算，"这条街客流三百人"才是装懂。
+var localTopics = []string{
+	"人流", "客流", "人气", "城管", "竞争", "同行", "对手",
+	"日均", "几个摊", "几家店", "生意最好",
 }
 
+// placeMarkers 地点指代。话题词配上它才算指向了某个具体地方。
+var placeMarkers = []string{"这条街", "那条街", "这一片", "附近", "周边", "隔壁", "对面"}
+
+// placeNameRe 从用户填的地址里拆出地名（"成都双流区东升街道志翔路"
+// 拆成 双流区 / 东升街道 / 志翔路），这样模型直接拿路名做断言也抓得住。
+var placeNameRe = regexp.MustCompile(`\p{Han}{2,4}?(?:路|街道|街|巷|镇|区|县|市|村|小区|夜市|市场)`)
+
 // normalizeItem 把模型给的置信度收进产品规则里。模型不守，代码来守。
-func normalizeItem(it *model.PlanItem) {
+func normalizeItem(it *model.PlanItem, city string) {
 	if !it.Confidence.Valid() {
 		// 模型给了不认识的值，按最保守的处理：当成待验证。
 		it.Confidence = model.ConfYellow
@@ -360,7 +374,7 @@ func normalizeItem(it *model.PlanItem) {
 
 	// 规则 4：涉及具体街道的人流、价格、竞争，一律不许标 green。
 	// 降成 red 而不是 yellow —— 这类事本来就只有用户站在那儿才知道。
-	if it.Confidence == model.ConfGreen && mentionsLocal(it.Title+it.Content) {
+	if it.Confidence == model.ConfGreen && mentionsLocal(it.Title+it.Content, city) {
 		it.Confidence = model.ConfRed
 	}
 
@@ -387,9 +401,31 @@ func normalizeItem(it *model.PlanItem) {
 	}
 }
 
-func mentionsLocal(s string) bool {
-	for _, w := range localHints {
+func mentionsLocal(s, city string) bool {
+	for _, w := range localFacts {
 		if strings.Contains(s, w) {
+			return true
+		}
+	}
+
+	hasTopic := false
+	for _, w := range localTopics {
+		if strings.Contains(s, w) {
+			hasTopic = true
+			break
+		}
+	}
+	if !hasTopic {
+		return false
+	}
+
+	for _, w := range placeMarkers {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	for _, name := range placeNameRe.FindAllString(city, -1) {
+		if strings.Contains(s, name) {
 			return true
 		}
 	}

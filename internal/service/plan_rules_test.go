@@ -68,7 +68,7 @@ func TestNormalizeItemNeverGreensLocalFacts(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			it := c.in
-			normalizeItem(&it)
+			normalizeItem(&it, "")
 
 			if it.Confidence != c.want {
 				t.Errorf("confidence = %q, 期望 %q", it.Confidence, c.want)
