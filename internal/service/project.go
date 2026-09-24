@@ -1,4 +1,7 @@
-// Package service 编排业务流程，是产品规则真正落地的地方。
+// Package service 是业务逻辑，产品规则真正落地的地方。
+//
+// 这里的函数只认业务参数和业务响应，不碰 HTTP、不碰 gin，
+// 也不接数据库连接，读写数据库调 dao 的公开函数。
 package service
 
 import (
@@ -6,8 +9,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/yes-man-engineer/baize_backend/internal/dao"
 	"github.com/yes-man-engineer/baize_backend/internal/model"
-	"github.com/yes-man-engineer/baize_backend/internal/repository"
 )
 
 var ErrEmptyMessage = errors.New("第一句话不能为空")
@@ -15,13 +18,12 @@ var ErrEmptyMessage = errors.New("第一句话不能为空")
 // titleRunes 标题截断长度，按字符不按字节，否则中文会被截半个。
 const titleRunes = 24
 
-type ProjectService struct {
-	projects *repository.ProjectRepo
-	messages *repository.MessageRepo
+type StartProjectReq struct {
+	Content string `json:"content"`
 }
 
-func NewProjectService(p *repository.ProjectRepo, m *repository.MessageRepo) *ProjectService {
-	return &ProjectService{projects: p, messages: m}
+type GetDetailReq struct {
+	ProjectID string `json:"project_id"`
 }
 
 // Detail 是聊天页刷新时要的全部东西。
@@ -30,12 +32,12 @@ type Detail struct {
 	Messages []model.Message `json:"messages"`
 }
 
-// Start 用第一条消息开一个项目。
+// StartProject 用第一条消息开一个项目。
 //
 // 这里一次模型都不调：用户点完发送要立刻跳进聊天页，等模型回话是下一个接口的事。
 // 标题也因此只能从他这句话里截，不然页面标题栏会先空着再跳字。
-func (s *ProjectService) Start(ctx context.Context, content string) (*Detail, error) {
-	content = strings.TrimSpace(content)
+func StartProject(ctx context.Context, req StartProjectReq) (*Detail, error) {
+	content := strings.TrimSpace(req.Content)
 	if content == "" {
 		return nil, ErrEmptyMessage
 	}
@@ -45,7 +47,7 @@ func (s *ProjectService) Start(ctx context.Context, content string) (*Detail, er
 		Title:  truncate(content, titleRunes),
 		Facts:  model.Facts{},
 	}
-	if err := s.projects.Create(ctx, project); err != nil {
+	if err := dao.CreateProject(ctx, project); err != nil {
 		return nil, err
 	}
 
@@ -54,20 +56,20 @@ func (s *ProjectService) Start(ctx context.Context, content string) (*Detail, er
 		Role:      model.RoleUser,
 		Content:   content,
 	}
-	if err := s.messages.Create(ctx, first); err != nil {
+	if err := dao.CreateMessage(ctx, first); err != nil {
 		return nil, err
 	}
 
 	return &Detail{Project: project, Messages: []model.Message{*first}}, nil
 }
 
-func (s *ProjectService) Detail(ctx context.Context, id string) (*Detail, error) {
-	project, err := s.projects.GetByID(ctx, id)
+func GetDetail(ctx context.Context, req GetDetailReq) (*Detail, error) {
+	project, err := dao.GetProject(ctx, req.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 
-	messages, err := s.messages.ListByProject(ctx, project.ID)
+	messages, err := dao.ListMessages(ctx, project.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -5,9 +5,10 @@ import (
 
 	"github.com/yes-man-engineer/baize_backend/internal/handler"
 	"github.com/yes-man-engineer/baize_backend/internal/middleware"
+	"github.com/yes-man-engineer/baize_backend/internal/service"
 )
 
-func New(dev bool, corsOrigins []string, h *handler.ProjectHandler) *gin.Engine {
+func New(dev bool, corsOrigins []string) *gin.Engine {
 	if !dev {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -21,8 +22,9 @@ func New(dev bool, corsOrigins []string, h *handler.ProjectHandler) *gin.Engine 
 
 	api := r.Group("/api")
 	{
-		api.POST("/projects", h.Start)
-		api.GET("/projects/:id", h.Detail)
+		api.POST("/projects", handler.Decorate(service.StartProject))
+		api.GET("/projects/:project_id", handler.Decorate(service.GetDetail))
+		api.POST("/projects/:project_id/messages", handler.DecorateStream(service.Reply))
 	}
 
 	return r

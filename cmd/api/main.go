@@ -12,10 +12,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/yes-man-engineer/baize_backend/internal/config"
-	"github.com/yes-man-engineer/baize_backend/internal/handler"
-	"github.com/yes-man-engineer/baize_backend/internal/repository"
+	"github.com/yes-man-engineer/baize_backend/internal/dao"
+	"github.com/yes-man-engineer/baize_backend/internal/llm"
 	"github.com/yes-man-engineer/baize_backend/internal/router"
-	"github.com/yes-man-engineer/baize_backend/internal/service"
 	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
 
@@ -25,22 +24,13 @@ func main() {
 	logger.Init(cfg.IsDev())
 	defer logger.Sync()
 
-	db, err := repository.NewDB(cfg.DSN(), cfg.IsDev())
-	if err != nil {
-		logger.Error("数据库初始化失败", zap.Error(err))
+	if err := initFrame(cfg); err != nil {
+		logger.Error("[main] 初始化失败", zap.Error(err))
+		logger.Sync()
 		os.Exit(1)
 	}
 
-	if cfg.LLMAPIKey == "" {
-		logger.Warn("LLM_API_KEY 为空，涉及模型的接口会直接报错")
-	}
-
-	projectSvc := service.NewProjectService(
-		repository.NewProjectRepo(db),
-		repository.NewMessageRepo(db),
-	)
-
-	r := router.New(cfg.IsDev(), cfg.CORSOrigins, handler.NewProjectHandler(projectSvc))
+	r := router.New(cfg.IsDev(), cfg.CORSOrigins)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.AppPort,
@@ -66,4 +56,27 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error("关闭超时", zap.Error(err))
 	}
+}
+
+// initFrame 把进程级的连接都建起来，只报错不决定进程死活，退不退由 main 定。
+func initFrame(cfg *config.Config) error {
+	if err := dao.Init(cfg.DSN(), cfg.IsDev()); err != nil {
+		return err
+	}
+
+	// 没有 key 照样能起，只是涉及模型的接口会报错。
+	// 本地调别的接口时不该被这个挡住。
+	if cfg.LLMAPIKey == "" {
+		logger.Warn("LLM_API_KEY 为空，涉及模型的接口会直接报错")
+	}
+
+	llm.Init(
+		cfg.LLMBaseURL,
+		cfg.LLMAPIKey,
+		cfg.LLMModel,
+		cfg.LLMTemperature,
+		time.Duration(cfg.LLMTimeoutSeconds)*time.Second,
+	)
+
+	return nil
 }

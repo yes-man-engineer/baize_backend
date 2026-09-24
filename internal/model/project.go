@@ -9,13 +9,21 @@ import (
 type ProjectStatus string
 
 const (
-	// StatusChatting 还在聊，方案没出来
+	// StatusChatting 还在聊
 	StatusChatting ProjectStatus = "chatting"
+	// StatusReady 该问的都问到了，可以出方案。但用户想接着聊也随他，
+	// 这是"可以了"不是"到此为止"。
+	StatusReady ProjectStatus = "ready"
 	// StatusPlanned 方案已生成
 	StatusPlanned ProjectStatus = "planned"
 	// StatusEnded 用户主动结束
 	StatusEnded ProjectStatus = "ended"
 )
+
+// Chatting 还能不能继续聊。聊够了不等于不让聊了。
+func (s ProjectStatus) Chatting() bool {
+	return s == StatusChatting || s == StatusReady
+}
 
 // Facts 模型从对话里抽出来的已确认信息。
 //
