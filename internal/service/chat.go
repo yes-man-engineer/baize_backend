@@ -35,7 +35,7 @@ type ReplyResp struct {
 // 落库时机是有讲究的：用户这句话先只挂在内存里给模型看，等整段回复
 // 成功生成之后才和回复一起入库。中途失败用户会重发，提前落库的话
 // 库里就会留下两条一模一样的。
-func Reply(ctx context.Context, req ReplyReq, onDelta func(text string, thinking bool)) (*ReplyResp, error) {
+func Reply(ctx context.Context, req ReplyReq, onProgress func(text string, thinkingChars int)) (*ReplyResp, error) {
 	project, err := dao.GetProject(ctx, req.ProjectID)
 	if err != nil {
 		return nil, err
@@ -66,12 +66,18 @@ func Reply(ctx context.Context, req ReplyReq, onDelta func(text string, thinking
 	var firstDelta time.Duration
 	var thinkingChars int
 	full, err := llm.Stream(genCtx, llm.ChatMessages(project.Facts, toLLM(history)), func(text string, thinking bool) {
+		// 思考内容一个字都不出服务器。模型在思考里会大段复述系统提示词，
+		// 推出去就等于把提示词发给浏览器，开发者工具里直接能看。
+		// 只推已思考的字数，前端拿它做动效足够了，泄露就无从发生。
 		if thinking {
 			thinkingChars += len([]rune(text))
-		} else if firstDelta == 0 {
+			onProgress("", thinkingChars)
+			return
+		}
+		if firstDelta == 0 {
 			firstDelta = time.Since(start)
 		}
-		onDelta(text, thinking)
+		onProgress(text, 0)
 	})
 	if err != nil {
 		return nil, err

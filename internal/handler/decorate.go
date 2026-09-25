@@ -49,7 +49,7 @@ func DecorateNoResp[Req any](biz func(context.Context, Req) error) gin.HandlerFu
 
 // DecorateStream 接边算边吐的业务函数，返回 SSE 流。
 // 业务函数拿到的 onDelta 只管往外推文本，推到哪去、叫什么事件是这一层的事。
-func DecorateStream[Req, Resp any](biz func(context.Context, Req, func(string, bool)) (Resp, error)) gin.HandlerFunc {
+func DecorateStream[Req, Resp any](biz func(context.Context, Req, func(string, int)) (Resp, error)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		req, err := bind[Req](c)
 		if err != nil {
@@ -59,18 +59,18 @@ func DecorateStream[Req, Resp any](biz func(context.Context, Req, func(string, b
 
 		send := openStream(c)
 
-		resp, err := biz(c.Request.Context(), req, func(text string, thinking bool) {
+		resp, err := biz(c.Request.Context(), req, func(text string, thinkingChars int) {
 			// 人已经走了就别往断掉的连接上写了。业务那边还在继续生成，
 			// 生成完照样入库，他刷新回来就能看到。
 			if c.Request.Context().Err() != nil {
 				return
 			}
-			// 业务只说这段是不是思考，叫什么事件名是这一层定的。
-			kind := "delta"
-			if thinking {
-				kind = "thinking"
+			// 还在思考时只有字数没有文本，思考内容不往外发。
+			if thinkingChars > 0 {
+				send(sseEvent{Type: "thinking", Chars: thinkingChars})
+				return
 			}
-			send(sseEvent{Type: kind, Text: text})
+			send(sseEvent{Type: "delta", Text: text})
 		})
 		if err != nil {
 			// 头已经发出去了，改不了 HTTP 状态码，错误只能当成一个事件推下去。
@@ -86,8 +86,10 @@ func DecorateStream[Req, Resp any](biz func(context.Context, Req, func(string, b
 type sseEvent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
-	Data any    `json:"data,omitempty"`
-	Msg  string `json:"message,omitempty"`
+	// Chars 模型已经思考了多少字。思考内容本身不发，只发这个数。
+	Chars int    `json:"chars,omitempty"`
+	Data  any    `json:"data,omitempty"`
+	Msg   string `json:"message,omitempty"`
 }
 
 // bind 路径参数和请求体绑到同一个结构体上，业务结构体只需要 json 标签。
