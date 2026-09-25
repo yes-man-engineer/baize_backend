@@ -20,6 +20,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
 
 type Role string
@@ -79,8 +83,46 @@ type chatRequest struct {
 	Model          string          `json:"model"`
 	Messages       []Message       `json:"messages"`
 	Stream         bool            `json:"stream,omitempty"`
+	StreamOptions  *streamOptions  `json:"stream_options,omitempty"`
 	Temperature    *float32        `json:"temperature,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+}
+
+type streamOptions struct {
+	// IncludeUsage 让模型在流的最后多发一个带用量的分片。
+	// 不开的话流式调用是拿不到 token 数的，花了多少钱只能靠字数估。
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// usage 一次调用花了多少 token。
+// 缓存命中数各家放的位置不一样，两处都收，取大的那个。
+type usage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	CachedTokens        int `json:"cached_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+func (u usage) cached() int {
+	if u.PromptTokensDetails.CachedTokens > u.CachedTokens {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return u.CachedTokens
+}
+
+// logUsage kind 用来区分是哪一路调用花的钱，说话那路和抽取那路成本差很多。
+func logUsage(kind, model string, u usage) {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 {
+		return
+	}
+	logger.Info("[llm] 用量",
+		zap.String("调用", kind),
+		zap.String("模型", model),
+		zap.Int("输入", u.PromptTokens),
+		zap.Int("其中命中缓存", u.cached()),
+		zap.Int("输出", u.CompletionTokens))
 }
 
 type responseFormat struct {
@@ -89,10 +131,11 @@ type responseFormat struct {
 
 func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(text string, thinking bool)) (string, error) {
 	body := chatRequest{
-		Model:       c.model,
-		Messages:    msgs,
-		Stream:      true,
-		Temperature: c.temperature,
+		Model:         c.model,
+		Messages:      msgs,
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+		Temperature:   c.temperature,
 	}
 
 	resp, err := c.post(ctx, body)
@@ -102,6 +145,7 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(te
 	defer resp.Body.Close()
 
 	var full strings.Builder
+	var spent usage
 	scanner := bufio.NewScanner(resp.Body)
 	// 单条 SSE 数据行可能很长，默认 64KB 上限不够用。
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -125,10 +169,15 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(te
 					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 			} `json:"choices"`
+			// 带用量的那个分片没有 choices，所以下面不能因为 choices 为空就跳过
+			Usage *usage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			// 单个分片解析不了就跳过，不要因此中断整段回复。
 			continue
+		}
+		if chunk.Usage != nil {
+			spent = *chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -143,6 +192,8 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(te
 			onDelta(delta, false)
 		}
 	}
+
+	logUsage("对话", c.model, spent)
 
 	if err := scanner.Err(); err != nil {
 		return full.String(), fmt.Errorf("读取模型流失败: %w", err)
@@ -177,10 +228,12 @@ func (c *client) jsonChat(ctx context.Context, msgs []Message, out any) error {
 		Choices []struct {
 			Message Message `json:"message"`
 		} `json:"choices"`
+		Usage usage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("解析模型响应失败: %w", err)
 	}
+	logUsage("抽取", c.model, parsed.Usage)
 	if len(parsed.Choices) == 0 {
 		return fmt.Errorf("模型没有返回内容")
 	}
