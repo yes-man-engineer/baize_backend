@@ -60,6 +60,11 @@ func DecorateStream[Req, Resp any](biz func(context.Context, Req, func(string)) 
 		send := openStream(c)
 
 		resp, err := biz(c.Request.Context(), req, func(delta string) {
+			// 人已经走了就别往断掉的连接上写了。业务那边还在继续生成，
+			// 生成完照样入库，他刷新回来就能看到。
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			send(sseEvent{Type: "delta", Text: delta})
 		})
 		if err != nil {

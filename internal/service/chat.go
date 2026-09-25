@@ -55,19 +55,40 @@ func Reply(ctx context.Context, req ReplyReq, onDelta func(string)) (*ReplyResp,
 		history = append(history, *incoming)
 	}
 
-	full, err := llm.Stream(ctx, llm.ChatMessages(project.Facts, toLLM(history)), onDelta)
+	// 生成和落库脱离请求的 context。用户关页面、刷新、切后台、断网，
+	// 请求的 context 立刻就取消了，挂在上面的话这一整段回复连同他刚说的
+	// 那句话会一起作废，他刷新回来什么都没有，还得重问一遍。
+	// 现在他走了这边照样生成完入库，回来就能看到。
+	// 超时由 llm 客户端自己的 http.Client 兜着，这里不再叠一层。
+	genCtx := context.WithoutCancel(ctx)
+
+	start := time.Now()
+	var firstDelta time.Duration
+	full, err := llm.Stream(genCtx, llm.ChatMessages(project.Facts, toLLM(history)), func(delta string) {
+		if firstDelta == 0 {
+			firstDelta = time.Since(start)
+		}
+		onDelta(delta)
+	})
 	if err != nil {
 		return nil, err
 	}
+	// 首字和总时长分开记：慢在模型出第一个字之前，还是慢在吐字本身，
+	// 是两个完全不同的问题，合成一个数就没法分辨了。
+	logger.Info("[Reply] 回复生成完成",
+		zap.String("project_id", project.ID),
+		zap.Duration("首字", firstDelta),
+		zap.Duration("总计", time.Since(start)),
+		zap.Int("字数", len([]rune(full))))
 
 	if incoming != nil {
-		if err := dao.CreateMessage(ctx, incoming); err != nil {
+		if err := dao.CreateMessage(genCtx, incoming); err != nil {
 			return nil, err
 		}
 	}
 
 	reply := &model.Message{ProjectID: project.ID, Role: model.RoleAssistant, Content: full}
-	if err := dao.CreateMessage(ctx, reply); err != nil {
+	if err := dao.CreateMessage(genCtx, reply); err != nil {
 		return nil, err
 	}
 
