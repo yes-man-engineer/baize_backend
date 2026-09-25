@@ -20,10 +20,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"go.uber.org/zap"
-
-	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
 
 type Role string
@@ -63,9 +59,14 @@ func Init(baseURL, apiKey, model string, temperature *float32, timeout time.Dura
 	}
 }
 
-// Stream 让模型说话，每吐出一段就调一次 onDelta，最后返回拼完整的全文。
-// onDelta 是用来往浏览器推的，返回值是用来落库的。
-func Stream(ctx context.Context, msgs []Message, onDelta func(string)) (string, error) {
+// Stream 让模型说话，每吐出一段就调一次 onDelta，最后返回正文全文。
+//
+// onDelta 的 thinking 为真表示这一段是模型的思考过程，不是给用户的答案。
+// 先思考再回答的模型（比如 Kimi 的 k2）会先吐几百上千字思考，实测占掉
+// 首字延迟的全部。不往外推的话用户要对着空白等几十秒。
+//
+// 返回值只含正文，思考过程不返回也不该落库。
+func Stream(ctx context.Context, msgs []Message, onDelta func(text string, thinking bool)) (string, error) {
 	return conn.streamChat(ctx, msgs, onDelta)
 }
 
@@ -86,7 +87,7 @@ type responseFormat struct {
 	Type string `json:"type"`
 }
 
-func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(string)) (string, error) {
+func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(text string, thinking bool)) (string, error) {
 	body := chatRequest{
 		Model:       c.model,
 		Messages:    msgs,
@@ -105,11 +106,6 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 	// 单条 SSE 数据行可能很长，默认 64KB 上限不够用。
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	// 诊断首字延迟用的。定位完就删，不要留成长期代码。
-	start := time.Now()
-	var firstChunk, firstContent time.Duration
-	chunks, reasoning := 0, 0
-
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -124,8 +120,8 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 			Choices []struct {
 				Delta struct {
 					Content string `json:"content"`
-					// 先思考再回答的模型把思考过程放这里。我们原来不解析，
-					// 如果它一直在发，界面上就是几十秒的空白。
+					// 先思考再回答的模型把思考过程放这里，实测它占掉了
+					// 首字延迟的全部，得往外推，不然界面上就是几十秒空白。
 					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 			} `json:"choices"`
@@ -138,26 +134,15 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 			continue
 		}
 
-		chunks++
-		if firstChunk == 0 {
-			firstChunk = time.Since(start)
+		if thinking := chunk.Choices[0].Delta.ReasoningContent; thinking != "" {
+			onDelta(thinking, true)
 		}
-		reasoning += len([]rune(chunk.Choices[0].Delta.ReasoningContent))
 
 		if delta := chunk.Choices[0].Delta.Content; delta != "" {
-			if firstContent == 0 {
-				firstContent = time.Since(start)
-			}
 			full.WriteString(delta)
-			onDelta(delta)
+			onDelta(delta, false)
 		}
 	}
-
-	logger.Info("[streamChat] 分片统计",
-		zap.Duration("首个分片", firstChunk),
-		zap.Duration("首个正文", firstContent),
-		zap.Int("分片数", chunks),
-		zap.Int("思考字数", reasoning))
 
 	if err := scanner.Err(); err != nil {
 		return full.String(), fmt.Errorf("读取模型流失败: %w", err)

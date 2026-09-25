@@ -35,7 +35,7 @@ type ReplyResp struct {
 // 落库时机是有讲究的：用户这句话先只挂在内存里给模型看，等整段回复
 // 成功生成之后才和回复一起入库。中途失败用户会重发，提前落库的话
 // 库里就会留下两条一模一样的。
-func Reply(ctx context.Context, req ReplyReq, onDelta func(string)) (*ReplyResp, error) {
+func Reply(ctx context.Context, req ReplyReq, onDelta func(text string, thinking bool)) (*ReplyResp, error) {
 	project, err := dao.GetProject(ctx, req.ProjectID)
 	if err != nil {
 		return nil, err
@@ -64,21 +64,24 @@ func Reply(ctx context.Context, req ReplyReq, onDelta func(string)) (*ReplyResp,
 
 	start := time.Now()
 	var firstDelta time.Duration
-	full, err := llm.Stream(genCtx, llm.ChatMessages(project.Facts, toLLM(history)), func(delta string) {
-		if firstDelta == 0 {
+	var thinkingChars int
+	full, err := llm.Stream(genCtx, llm.ChatMessages(project.Facts, toLLM(history)), func(text string, thinking bool) {
+		if thinking {
+			thinkingChars += len([]rune(text))
+		} else if firstDelta == 0 {
 			firstDelta = time.Since(start)
 		}
-		onDelta(delta)
+		onDelta(text, thinking)
 	})
 	if err != nil {
 		return nil, err
 	}
-	// 首字和总时长分开记：慢在模型出第一个字之前，还是慢在吐字本身，
-	// 是两个完全不同的问题，合成一个数就没法分辨了。
+	// 首字延迟基本等于模型思考了多久，思考字数一起记着，这两个数要对得上。
 	logger.Info("[Reply] 回复生成完成",
 		zap.String("project_id", project.ID),
 		zap.Duration("首字", firstDelta),
 		zap.Duration("总计", time.Since(start)),
+		zap.Int("思考字数", thinkingChars),
 		zap.Int("字数", len([]rune(full))))
 
 	if incoming != nil {
