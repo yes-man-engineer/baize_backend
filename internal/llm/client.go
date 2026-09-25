@@ -75,6 +75,10 @@ func Stream(ctx context.Context, msgs []Message, onDelta func(text string, think
 }
 
 // JSON 让模型按结构吐数据，反序列化到 out。
+//
+// 这一路关掉思考。它不面向用户、输出是固定结构，不需要推理。
+// 实测同一段输入，开思考输出 754 token / 12.6 秒，关掉之后 56 token / 1.4 秒，
+// JSON 质量没差别，反而更干净（开思考那版还会多吐一圈代码围栏）。
 func JSON(ctx context.Context, msgs []Message, out any) error {
 	return conn.jsonChat(ctx, msgs, out)
 }
@@ -86,6 +90,8 @@ type chatRequest struct {
 	StreamOptions  *streamOptions  `json:"stream_options,omitempty"`
 	Temperature    *float32        `json:"temperature,omitempty"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	// ReasoningEffort 传 none 关掉思考。空字符串表示不带这个参数，按模型默认来。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type streamOptions struct {
@@ -128,6 +134,15 @@ func logUsage(kind, model string, u usage) {
 type responseFormat struct {
 	Type string `json:"type"`
 }
+
+const (
+	// effortNone 关掉思考。enable_thinking 那个参数是无效的，会被静默忽略，别用。
+	effortNone = "none"
+	// noThinkingTemperature 关掉思考之后模型只接受这个温度，传别的会被拒。
+	noThinkingTemperature float32 = 0.6
+)
+
+func ptr[T any](v T) *T { return &v }
 
 func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(text string, thinking bool)) (string, error) {
 	body := chatRequest{
@@ -207,9 +222,12 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(te
 
 func (c *client) jsonChat(ctx context.Context, msgs []Message, out any) error {
 	body := chatRequest{
-		Model:          c.model,
-		Messages:       msgs,
-		Temperature:    c.temperature,
+		Model:           c.model,
+		Messages:        msgs,
+		ReasoningEffort: effortNone,
+		// 不思考模式下温度只能是 noThinkingTemperature，和对话那一路不一样，
+		// 所以这里不能用 c.temperature，那个只管对话。
+		Temperature:    ptr(noThinkingTemperature),
 		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
 
