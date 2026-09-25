@@ -20,6 +20,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/yes-man-engineer/baize_backend/pkg/logger"
 )
 
 type Role string
@@ -101,6 +105,11 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 	// 单条 SSE 数据行可能很长，默认 64KB 上限不够用。
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	// 诊断首字延迟用的。定位完就删，不要留成长期代码。
+	start := time.Now()
+	var firstChunk, firstContent time.Duration
+	chunks, reasoning := 0, 0
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -115,6 +124,9 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 			Choices []struct {
 				Delta struct {
 					Content string `json:"content"`
+					// 先思考再回答的模型把思考过程放这里。我们原来不解析，
+					// 如果它一直在发，界面上就是几十秒的空白。
+					ReasoningContent string `json:"reasoning_content"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}
@@ -126,11 +138,27 @@ func (c *client) streamChat(ctx context.Context, msgs []Message, onDelta func(st
 			continue
 		}
 
+		chunks++
+		if firstChunk == 0 {
+			firstChunk = time.Since(start)
+		}
+		reasoning += len([]rune(chunk.Choices[0].Delta.ReasoningContent))
+
 		if delta := chunk.Choices[0].Delta.Content; delta != "" {
+			if firstContent == 0 {
+				firstContent = time.Since(start)
+			}
 			full.WriteString(delta)
 			onDelta(delta)
 		}
 	}
+
+	logger.Info("[streamChat] 分片统计",
+		zap.Duration("首个分片", firstChunk),
+		zap.Duration("首个正文", firstContent),
+		zap.Int("分片数", chunks),
+		zap.Int("思考字数", reasoning))
+
 	if err := scanner.Err(); err != nil {
 		return full.String(), fmt.Errorf("读取模型流失败: %w", err)
 	}
